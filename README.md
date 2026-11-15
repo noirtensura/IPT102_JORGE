@@ -6,7 +6,7 @@ Open **http://localhost/IPT_JORGE/** with XAMPP Apache running. No install, buil
 
 ## What you can try
 
-- **Landing:** meet Eco and choose Proceed to enter the app.
+- **Landing:** interactive 4-step walkthrough with Eco—scroll down step by step on mobile, or step left and right with arrow controls and keyboard arrow keys on desktop—plus a Skip demo & proceed link.
 - **Scan:** preview a local JPEG, PNG, or WebP (up to 10 MB / 40 megapixels), drag and drop an image, or capture an illustrated sample in the simulated camera. This screen only contains the scanner.
 - **Scan Result:** choose a scripted Plastic, Paper, Metal, Glass, or Uncertain scenario. Completing a scan opens a separate result screen with illustrative confidence, educational guidance, and an optional Save to History action.
 - **Overview:** choose Continue to Overview to see session counts and a compact latest-result summary. Reopen that result or start another scan.
@@ -56,6 +56,7 @@ IPT_JORGE/
     css/styles.css          Responsive styles
     js/data.js              Material definitions and five starter records
     js/pages.js             Screen markup and presentation helpers
+    js/walkthrough.js       Landing walkthrough step navigation and demo controls
     js/app.js               Routing, scan flow, state, Eco, and interaction handlers
     mascots/sheet-1.png ... sheet-6.png
     favicon.svg

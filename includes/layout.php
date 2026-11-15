@@ -17,6 +17,7 @@ if (!isset($pageTitle)) {
   <link rel="stylesheet" href="assets/css/styles.css">
   <script src="assets/js/data.js" defer></script>
   <script src="assets/js/pages.js" defer></script>
+  <script src="assets/js/walkthrough.js" defer></script>
   <script src="assets/js/app.js" defer></script>
 </head>
 <body>

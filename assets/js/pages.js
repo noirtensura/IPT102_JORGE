@@ -29,11 +29,84 @@ function stats() {
 }
 function statIcon(name) { return `<span class="stat-icon">${icon(name)}</span>`; }
 
+const walkthroughFeatures = {
+  scan: "Scan: choose a local photo or an illustrated sample to begin a new result.",
+  overview: "Overview: see your session counts and reopen your latest result.",
+  history: "History: search saved records, filter materials, and inspect details.",
+  analytics: "Analytics: explore your sample records with charts and an accessible data table.",
+  guide: "Guide: look up materials, preparation tips, and special-handling reminders."
+};
+
+const walkthroughSampleKeys = ["plastic", "paper", "metal", "glass"];
+const walkthroughStepsMeta = [
+  { label: "Meet Eco", short: "Meet Eco" },
+  { label: "Scan an item", short: "Scan" },
+  { label: "Read your result", short: "Result" },
+  { label: "Explore your space", short: "Explore" }
+];
+
 function landingPage() {
+  const defaultMaterial = materials.plastic;
   return `<section id="landing-screen" class="landing-page" aria-labelledby="landing-title">
-    <div class="landing-copy"><span class="eyebrow">A LITTLE MORE MINDFUL.</span><h1 id="landing-title" tabindex="-1">A little scan. <span>A smarter sort.</span></h1><p>Meet Eco, your friendly sorting sidekick. Get to know everyday materials, one item at a time.</p><a class="button primary proceed-button" id="proceed" href="scan.php">Proceed${icon("arrow")}</a><p class="landing-note">Five sample records. Your images stay in your browser.</p></div>
-    <div class="landing-mascot">${mascotArt()}<p data-mascot-caption></p></div>
-    <ol class="landing-steps" aria-label="How EcoSort works"><li><span>01</span>Scan an item</li><li><span>02</span>Review your result</li><li><span>03</span>See your overview</li></ol>
+    <header class="walkthrough-header">
+      <div><span class="eyebrow">A LITTLE HELP GETTING STARTED</span><h1 id="landing-title" tabindex="-1">Your first sort starts here.</h1></div>
+      <a class="text-link" id="proceed" href="scan.php">Skip demo &amp; proceed${icon("arrow")}</a>
+    </header>
+    <div id="walkthrough">
+      <div class="walkthrough-topbar">
+        <ol class="tour-stepper" aria-label="Walkthrough steps">${walkthroughStepsMeta.map((item, index) => `<li><button type="button" class="tour-step-pill" data-tour-jump="${index}"><span>0${index + 1}</span>${item.short}</button></li>`).join("")}</ol>
+        <div class="tour-status-row">
+          <p id="walkthrough-status" role="status" aria-live="polite" aria-atomic="true"></p>
+          <span class="tour-scroll-hint" id="tour-scroll-hint">${icon("chevron")}<span>Scroll down for steps</span></span>
+          <span class="tour-key-hint">Use ← → keys or arrows</span>
+        </div>
+        <div class="tour-progress" aria-hidden="true"><span id="tour-progress-fill"></span></div>
+      </div>
+      <div class="walkthrough-stage">
+        <button type="button" class="button secondary tour-arrow tour-arrow-prev" data-tour-prev aria-label="Previous walkthrough step">${icon("arrow")}<span>Prev</span></button>
+        <div class="walkthrough-track" role="region" aria-label="Getting started with EcoSort">
+          <section class="walkthrough-step" data-tour-step="0" data-tour-mood="welcome" data-tour-title="${walkthroughStepsMeta[0].label}" role="group" aria-labelledby="tour-welcome-title">
+            <div class="landing-copy"><span class="eyebrow">MEET YOUR SORTING SIDEKICK</span><h2 id="tour-welcome-title" tabindex="-1">A little scan. <span>A smarter sort.</span></h2><p>Hi, I’m Eco! Let’s walk through a sample together. You’ll see how to scan an item, read a sample result, and find your way around.</p><ol class="landing-steps" aria-label="Your sorting journey"><li><span>01</span>Scan</li><li><span>02</span>Review</li><li><span>03</span>Explore</li></ol><button type="button" class="button primary" data-tour-next>Show me how${icon("arrow")}</button><p class="landing-note">A short, hands-on demo. No sign-up or camera needed.</p></div>
+            <div class="landing-mascot">${mascotArt()}<p>I’ll be here at every step.</p></div>
+          </section>
+          <section class="walkthrough-step" data-tour-step="1" data-tour-mood="camera" data-tour-title="${walkthroughStepsMeta[1].label}" role="group" aria-labelledby="tour-scan-title">
+            <div class="tour-copy"><span class="eyebrow">01 / SCAN AN ITEM</span><h2 id="tour-scan-title" tabindex="-1">Give one item the spotlight.</h2><p>Open Scan and choose a clear JPEG, PNG, or WebP photo—or try the simulated camera. Keep one item centered in good lighting.</p><p>Pick a sample item in this preview and run a quick practice scan.</p><div class="walkthrough-mentor">${mascotArt()}<p>Your photo stays in this browser. This demo doesn’t open your camera or upload a file.</p></div></div>
+            <div class="tour-demo" aria-label="Interactive sample scanner preview">
+              <div class="tour-demo-heading">${icon("scan")}Scan<span>DEMO</span></div>
+              <div class="tour-material-picker" role="group" aria-label="Choose a sample item">${walkthroughSampleKeys.map(key => `<button type="button" class="tour-material-chip" data-tour-material="${key}" aria-pressed="${key === "plastic"}">${materials[key].name}</button>`).join("")}</div>
+              <div class="tour-upload" id="tour-upload-box">
+                <div id="tour-upload-placeholder"><span class="upload-emblem">${icon("upload")}</span><h3>One item is all you need.</h3><p id="tour-placeholder-caption">Ready to preview: ${defaultMaterial.example}.</p></div>
+                <div id="tour-upload-scanning" class="tour-scanning" hidden><span class="spinner" aria-hidden="true"></span><p>Preparing sample preview…</p></div>
+                <div id="tour-upload-art" class="tour-item" hidden><svg class="material-art" id="tour-sample-svg" aria-hidden="true"><use href="#art-plastic"/></svg><p id="tour-sample-caption">${defaultMaterial.example} · Illustrated sample</p></div>
+              </div>
+              <div class="tour-demo-actions">
+                <button type="button" class="button primary full-width" data-tour-sample>${icon("upload")}<span>Try this sample</span></button>
+                <button type="button" class="button secondary full-width" data-tour-next id="tour-see-result" hidden>See sample result${icon("arrow")}</button>
+              </div>
+              <p id="tour-sample-feedback" class="tour-demo-note" role="status">This is a practice preview. Your scan history stays as it is.</p>
+            </div>
+          </section>
+          <section class="walkthrough-step" data-tour-step="2" data-tour-mood="success" data-tour-title="${walkthroughStepsMeta[2].label}" role="group" aria-labelledby="tour-result-title">
+            <div class="tour-copy"><span class="eyebrow">02 / REVIEW YOUR RESULT</span><h2 id="tour-result-title" tabindex="-1">Know the material. Check the next step.</h2><p>Your result brings the material, an illustrative confidence score, and sorting guidance into one place.</p><p>Use Save to History when you want to keep a result in this session, then Continue to Overview. If an item is uncertain, pause and check before sorting.</p><div class="walkthrough-mentor">${mascotArt()}<p>Sample scores are examples, not live AI predictions. Your local collector decides what is accepted.</p></div></div>
+            <div class="tour-demo" aria-label="Sample result preview">
+              <div class="tour-demo-heading">${icon("check")}Scan result<span>DEMO</span></div>
+              <div class="tour-result-label"><span class="thumb material-plastic" id="tour-result-thumb"><svg class="material-art" id="tour-result-svg" aria-hidden="true"><use href="#art-plastic"/></svg></span><div><span class="eyebrow">ILLUSTRATED SAMPLE</span><h3 id="tour-result-item">${defaultMaterial.example}</h3><span class="material-tag material-plastic" id="tour-result-tag">${defaultMaterial.name}</span></div></div>
+              <div class="tour-score-label"><span>Illustrative confidence</span><strong id="tour-result-score">${defaultMaterial.score}%</strong></div>
+              <div class="tour-score" id="tour-result-meter" role="meter" aria-label="Illustrative sample confidence, not model accuracy" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${defaultMaterial.score}"><span id="tour-result-fill" style="width:${defaultMaterial.score}%"></span></div>
+              <details class="tour-tip"><summary>How should I prepare it?${icon("chevron")}</summary><p id="tour-result-advice">${defaultMaterial.advice}</p></details>
+              <div class="tour-result-actions"><button type="button" class="button secondary full-width" data-tour-demo-save aria-pressed="false">${icon("save")}<span>Save to History (demo)</span></button></div>
+              <p id="tour-result-feedback" class="tour-demo-note" role="status">Open the tip or test saving in this preview. Saving a real sample result is optional.</p>
+            </div>
+          </section>
+          <section class="walkthrough-step walkthrough-step-final" data-tour-step="3" data-tour-mood="overview" data-tour-title="${walkthroughStepsMeta[3].label}" role="group" aria-labelledby="tour-overview-title">
+            <div class="tour-copy"><span class="eyebrow">03 / FIND YOUR WAY AROUND</span><h2 id="tour-overview-title" tabindex="-1">A little perspective. Everything in reach.</h2><p>Overview gives you a quick look at your activity. The bottom navigation takes you to Scan, Overview, History, Analytics, and Guide.</p><p>Tap the destinations in this preview to see what each one does.</p><div class="walkthrough-mentor">${mascotArt()}<p>Start with five sample records. Your saved examples last until you refresh.</p></div></div>
+            <div class="tour-demo" aria-label="Overview and bottom navigation preview"><div class="tour-demo-heading">${icon("grid")}Your overview<span>DEMO</span></div><div class="tour-metrics"><div><strong>5</strong><span>Sample records</span></div><div><strong>4</strong><span>Material categories</span></div></div><p id="tour-feature-description" class="tour-feature-description" role="status">${walkthroughFeatures.overview}</p><div class="tour-feature-nav" role="group" aria-label="Try the bottom navigation">${[["scan","scan","Scan"],["overview","grid","Overview"],["history","history","History"],["analytics","chart","Analytics"],["guide","book","Guide"]].map(([key,symbol,label]) => `<button type="button" data-tour-feature="${key}" aria-pressed="${key === "overview"}">${icon(symbol)}<span>${label}</span></button>`).join("")}</div><p class="tour-demo-note">Practice preview · Choose Proceed to Scan when you’re ready.</p></div>
+            <div class="tour-final-actions"><a class="button primary" id="tour-proceed" href="scan.php">Proceed to Scan${icon("arrow")}</a><button type="button" class="button secondary" data-tour-restart>Replay walkthrough</button></div>
+          </section>
+        </div>
+        <button type="button" class="button secondary tour-arrow tour-arrow-next" data-tour-next aria-label="Next walkthrough step"><span>Next</span>${icon("arrow")}</button>
+      </div>
+    </div>
   </section>`;
 }
 

@@ -63,7 +63,7 @@ const reducedMascotMotion = matchMedia("(prefers-reduced-motion: reduce)");
 let mascotState = "";
 
 function pageMascotState() {
-  if (route === "landing") return "welcome";
+  if (route === "landing") return document.querySelector(".walkthrough-step[data-tour-active]")?.dataset.tourMood || "welcome";
   if (route === "overview") return "overview";
   if (route === "history") return filteredRecords().length ? "history" : "empty";
   if (route === "analytics") return state.records.length ? "analytics" : "empty";
@@ -81,21 +81,29 @@ function pageMascotState() {
   return state.mascotTouched ? "ready" : "welcome";
 }
 
+function animateMascot(portrait, motion) {
+  portrait.getAnimations().forEach(animation => animation.cancel());
+  const step = portrait.closest(".walkthrough-step");
+  if (!reducedMascotMotion.matches && (!step || step.hasAttribute("data-tour-active"))) {
+    portrait.animate(mascotMotions[motion], { duration: motion === "celebrate" ? 1300 : 1000, iterations: motion === "inspect" ? 2 : 1, easing: "ease-in-out" });
+  }
+}
+
 function updateMascots(context = helpDialog.open ? mascotState || "help" : pageMascotState()) {
   const reaction = mascotStates[context];
   document.querySelectorAll("[data-mascot-slot]").forEach(portrait => {
-    if (portrait.dataset.mascotState === context) return;
+    const portraitContext = portrait.closest("[data-tour-mood]")?.dataset.tourMood || context;
+    const pose = mascotStates[portraitContext];
+    if (portrait.dataset.mascotState === portraitContext) return;
     portrait.getAnimations().forEach(animation => animation.cancel());
-    const [sheet, cell] = reaction[portrait.dataset.mascotSlot];
-    portrait.dataset.mascotState = context;
+    const [sheet, cell] = pose[portrait.dataset.mascotSlot];
+    portrait.dataset.mascotState = portraitContext;
     portrait.dataset.sheet = sheet;
     portrait.dataset.cell = cell;
     portrait.style.setProperty("--mascot-x", `${-(cell % 3) * 100}%`);
     portrait.style.setProperty("--mascot-y", `${-Math.floor(cell / 3) * 100}%`);
     portrait.querySelector("img").src = `assets/mascots/sheet-${sheet}.png`;
-    if (!reducedMascotMotion.matches) {
-      portrait.animate(mascotMotions[reaction.motion], { duration: reaction.motion === "celebrate" ? 1300 : 1000, iterations: reaction.motion === "inspect" ? 2 : 1, easing: "ease-in-out" });
-    }
+    animateMascot(portrait, pose.motion);
   });
   document.querySelectorAll("[data-mascot-caption]").forEach(caption => { caption.textContent = reaction.caption; });
   document.querySelector("#help-launcher").setAttribute("aria-label", `Ask Eco. ${reaction.caption}`);
@@ -143,7 +151,9 @@ function render(focus = false) {
     if (link.pathname === new URL(routeURL(activeRoute), location.href).pathname) link.setAttribute("aria-current", "page");
     else link.removeAttribute("aria-current");
   });
+  stopWalkthrough();
   main.innerHTML = pages[route]();
+  if (route === "landing") setupWalkthrough();
   updateMascots();
   if (focus) {
     main.querySelector("h1")?.focus({ preventScroll: true });
@@ -395,7 +405,7 @@ document.addEventListener("change", event => {
 });
 
 document.addEventListener("keydown", event => {
-  if (event.target.matches(".mode-tab") && ["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) {
+  if (event.target instanceof Element && event.target.matches(".mode-tab") && ["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) {
     event.preventDefault();
     const next = event.key === "Home" ? "upload" : event.key === "End" ? "camera" : state.mode === "upload" ? "camera" : "upload";
     document.querySelector(`[data-mode="${next}"]`).click();

@@ -20,9 +20,11 @@ const doc = () => frame.contentDocument;
 const win = () => frame.contentWindow;
 const find = selector => doc().querySelector(selector);
 function assert(condition, message) { checks++; if (!condition) throw new Error(message); }
-async function until(condition, message) {
-  for (let attempt = 0; attempt < 150; attempt++) { if (condition()) return; await tick(30); }
-  throw new Error(message);
+function until(condition, message) {
+  return (async () => {
+    for (let attempt = 0; attempt < 150; attempt++) { if (condition()) return; await tick(30); }
+    throw new Error(typeof message === "function" ? message() : message);
+  })();
 }
 async function test(name, run) { await run(); messages.push(`PASS ${name}`); output.textContent = messages.join("\n"); }
 async function click(selector) { const element = find(selector); assert(element, `Missing control: ${selector}`); element.click(); await tick(); }
@@ -73,6 +75,51 @@ function contrast(a, b) { const values = [luminance(a), luminance(b)].sort((x, y
       assert(find('[data-stat="total"]').textContent === "5", "Expected five sample records");
       assert(!find("#scan-screen") && !find("#history-list") && !find(".guide-list") && !find(".result-category"), "Overview must not embed other feature screens");
       await click(".site-brand"); await until(() => find("#landing-screen"), "Brand should return to landing");
+    });
+    await test("Landing walkthrough: PC left/right arrows, interactive demo, and mobile scroll steps", async () => {
+      frame.style.width = "1440px"; await load("landingpage.php");
+      const steps = [...doc().querySelectorAll(".walkthrough-step")];
+      assert(steps.length === 4 && !steps[0].hidden && steps.slice(1).every(step => step.hidden), "Desktop walkthrough should show one step at a time");
+      assert(find(".tour-arrow[data-tour-prev]").disabled && !find(".tour-arrow[data-tour-next]").disabled, "Desktop arrows should start with Prev disabled and Next enabled");
+      assert(find("#walkthrough-status").textContent.includes("1 / 4"), "Desktop status should announce step 1 of 4");
+      doc().dispatchEvent(new (win().KeyboardEvent)("keydown", { key: "ArrowRight", bubbles: true })); await tick();
+      assert(!steps[1].hidden && steps[0].hidden && doc().body.dataset.mascotState === "camera", "ArrowRight key from landing should advance to step 2");
+      await click('[data-tour-material="paper"]');
+      await click("[data-tour-sample]");
+      await until(() => !find("#tour-upload-art").hidden, "Walkthrough sample preview did not reveal");
+      assert(find("#tour-sample-caption").textContent.includes("Folded newspaper"), "Sample preview did not match selected paper item");
+      await click("#tour-see-result");
+      assert(!steps[2].hidden && find("#tour-result-item").textContent === "Folded newspaper" && find("#tour-result-score").textContent === "91%", "Result demo did not sync with selected sample");
+      await click("[data-tour-demo-save]");
+      assert(find("[data-tour-demo-save]").getAttribute("aria-pressed") === "true", "Practice save toggle failed");
+      await click(".tour-arrow[data-tour-next]");
+      assert(!steps[3].hidden && find(".tour-arrow[data-tour-next]").disabled && doc().body.dataset.mascotState === "overview", "Next arrow did not reach final step");
+      await click('[data-tour-feature="history"]');
+      assert(find("#tour-feature-description").textContent.includes("History:"), "Feature preview button did not update description");
+      doc().dispatchEvent(new (win().KeyboardEvent)("keydown", { key: "ArrowLeft", bubbles: true })); await tick();
+      assert(!steps[2].hidden, "ArrowLeft key did not move back to previous step");
+      doc().dispatchEvent(new (win().KeyboardEvent)("keydown", { key: "Home", bubbles: true })); await tick();
+      assert(!steps[0].hidden, "Home key did not return to first step");
+      doc().dispatchEvent(new (win().KeyboardEvent)("keydown", { key: "End", bubbles: true })); await tick();
+      assert(!steps[3].hidden, "End key did not jump to last step");
+      await click("#tour-proceed");
+      await until(() => find("#page-label").textContent === "Scan Waste", "Final walkthrough CTA did not open Scan");
+      await go("overview", "Overview");
+      assert(find('[data-stat="total"]').textContent === "5", "Walkthrough practice demo must not alter the five starter records");
+
+      frame.style.width = "375px"; await load("landingpage.php");
+      const mobileSteps = [...doc().querySelectorAll(".walkthrough-step")];
+      assert(mobileSteps.every(step => !step.hidden), "Mobile walkthrough must keep all steps visible for scrolling");
+      assert(win().getComputedStyle(find(".tour-arrow[data-tour-prev]")).display === "none" && win().getComputedStyle(find(".tour-arrow[data-tour-next]")).display === "none", "Desktop left/right arrows should be hidden on mobile");
+      const tops = mobileSteps.map(step => step.getBoundingClientRect().top);
+      assert(tops[0] < tops[1] && tops[1] < tops[2] && tops[2] < tops[3], "Mobile steps must stack vertically");
+      for (const [index, expectedMood] of [[1, "camera"], [2, "success"], [3, "overview"], [1, "camera"], [0, "welcome"]]) {
+        if (index === 0) win().scrollTo(0, 0);
+        else win().scrollTo(0, Math.max(0, mobileSteps[index].offsetTop - 130));
+        win().dispatchEvent(new (win().Event)("scroll"));
+        await until(() => doc().body.dataset.mascotState === expectedMood, () => `Mobile scroll did not activate step ${index + 1} (${expectedMood}); state=${doc().body.dataset.mascotState}, scrollY=${win().scrollY}, innerH=${win().innerHeight}, scrollH=${doc().documentElement.scrollHeight}, tops=${mobileSteps.map(s => Math.round(s.getBoundingClientRect().top)).join(",")}, status=${find("#walkthrough-status")?.textContent}`);
+      }
+      frame.style.width = "1440px"; await tick();
     });
     await test("Navigation, browser back/forward, focus, skip link, and direct results", async () => {
       await go("scan", "Scan Waste");
