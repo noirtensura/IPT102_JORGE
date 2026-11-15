@@ -1,0 +1,378 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>EcoSort AI · Browser checks</title>
+<style>body{font:15px system-ui;margin:24px;color:#213d2b}pre{white-space:pre-wrap}iframe{width:1440px;height:1000px;border:1px solid #ccc;display:block}h1{font-size:24px}</style>
+<body data-test-status="running">
+<h1>EcoSort AI · Browser checks</h1>
+<pre id="results">Starting a fresh prototype session…</pre>
+<iframe id="app" title="EcoSort AI test instance"></iframe>
+<script>
+"use strict";
+const frame = document.querySelector("#app");
+const output = document.querySelector("#results");
+const errors = [];
+const messages = [];
+let checks = 0;
+const tick = (ms = 30) => new Promise(resolve => setTimeout(resolve, ms));
+const doc = () => frame.contentDocument;
+const win = () => frame.contentWindow;
+const find = selector => doc().querySelector(selector);
+function assert(condition, message) { checks++; if (!condition) throw new Error(message); }
+async function until(condition, message) {
+  for (let attempt = 0; attempt < 150; attempt++) { if (condition()) return; await tick(30); }
+  throw new Error(message);
+}
+async function test(name, run) { await run(); messages.push(`PASS ${name}`); output.textContent = messages.join("\n"); }
+async function click(selector) { const element = find(selector); assert(element, `Missing control: ${selector}`); element.click(); await tick(); }
+async function change(selector, value, type = "change") { const element = find(selector); element.value = value; element.dispatchEvent(new (win().Event)(type, { bubbles: true })); await tick(); }
+async function ask(question) { await change("#help-question", question, "input"); find("#help-form").requestSubmit(); await tick(); return find("#help-messages .help-message:last-child"); }
+const pageFiles = {"landing": "landingpage.php", "scan": "scan.php", "result": "scan-result.php", "overview": "overview.php", "history": "history.php", "analytics": "analytics.php", "guide": "waste-guide.php"};
+function pageURL(path) {
+  const [page, material] = path.replace(/^#/, "").split("/");
+  const query = material ? "?material=" + encodeURIComponent(material) : "";
+  return new URL(pageFiles[page] + query, new URL("../", location.href)).href;
+}
+async function go(page, title) {
+  const link = doc().createElement("a");
+  link.href = pageURL(page); doc().body.append(link); link.click(); link.remove();
+  await tick(); await until(() => find("#page-label")?.textContent === title, "Route " + page + " did not render");
+}
+async function upload(file) {
+  const transfer = new (win().DataTransfer)(); transfer.items.add(file);
+  const input = find("#image-file"); input.files = transfer.files; input.dispatchEvent(new (win().Event)("change", { bubbles: true }));
+  await until(() => find("#dropzone")?.getAttribute("aria-busy") === "false", "Image validation did not finish");
+}
+async function load(file = "landingpage.php") {
+  await new Promise(resolve => { frame.onload = resolve; frame.src = "../" + file; });
+  await until(() => find("h1"), "Prototype did not start");
+  win().addEventListener("error", event => errors.push(event.message));
+  win().addEventListener("unhandledrejection", event => errors.push(String(event.reason)));
+}
+function luminance(hex) {
+  const values = hex.match(/\w\w/g).map(value => parseInt(value, 16) / 255).map(value => value <= .04045 ? value / 12.92 : ((value + .055) / 1.055) ** 2.4);
+  return values[0] * .2126 + values[1] * .7152 + values[2] * .0722;
+}
+function contrast(a, b) { const values = [luminance(a), luminance(b)].sort((x, y) => y - x); return (values[0] + .05) / (values[1] + .05); }
+
+(async () => {
+  try {
+    await load();
+    await test("Landing, Proceed, isolated screens, local assets, and accessible colors", async () => {
+      assert(find("#landing-screen") === find("main").firstElementChild && find("#proceed"), "A fresh session must open the landing page");
+      assert(find("#bottom-nav").hidden && !find("#scan-screen") && !find("#overview-screen"), "Landing should have one focused entry into the app");
+      assert(!find("#mobile-menu") && !find(".menu-toggle") && !find(".sidebar"), "Old navigation must be removed");
+      assert(doc().querySelectorAll(".landing-steps li").length === 3, "The scan, result, overview flow should be explained");
+      for (const [a, b] of [["202f26", "f7f9f5"], ["647065", "f7f9f5"], ["ffffff", "20613e"], ["af3430", "ffffff"]]) assert(contrast(a, b) >= 4.5, "Insufficient text contrast");
+      assert(win().performance.getEntriesByType("resource").every(entry => entry.name.startsWith(win().location.origin)), "An asset requested an external origin");
+      await click("#proceed"); await until(() => find("#page-label").textContent === "Scan Waste", "Proceed did not open the scanner");
+      assert(find("#scan-screen") && !find("#overview-screen") && !find(".result-category") && !find("[data-stat]") && !find("table") && !find(".guide-list"), "Scan must only contain the scanner");
+      assert(!find("#bottom-nav").hidden, "Proceed must reveal the bottom navigation");
+      await go("overview", "Overview");
+      assert(find('[data-stat="total"]').textContent === "5", "Expected five sample records");
+      assert(!find("#scan-screen") && !find("#history-list") && !find(".guide-list") && !find(".result-category"), "Overview must not embed other feature screens");
+      await click(".site-brand"); await until(() => find("#landing-screen"), "Brand should return to landing");
+    });
+    await test("Navigation, browser back/forward, focus, skip link, and direct results", async () => {
+      await go("scan", "Scan Waste");
+      assert(doc().activeElement.tagName === "H1", "Route changes should focus the heading");
+      await click(".skip-link");
+      assert(win().location.href === pageURL("scan") && doc().activeElement.id === "main", "Skip link changed route or did not focus content");
+      await go("history", "History"); win().history.back();
+      await until(() => find("#page-label").textContent === "Scan Waste", "Back navigation failed");
+      win().history.forward(); await until(() => find("#page-label").textContent === "History", "Forward navigation failed");
+      await go("result", "Scan Result");
+      assert(find("main").textContent.includes("No result is available") && !find("#scan-screen"), "Empty direct result link is missing");
+      await click('main a[href="scan.php"]'); await until(() => find("#scan-screen"), "Empty result recovery failed");
+      await go("landing", "Welcome"); assert(find("#landing-screen"), "Landing navigation failed");
+    });
+    await test("Scan to result to overview, honest labels, and duplicate-save prevention", async () => {
+      await go("scan", "Scan Waste");
+      assert(find('[data-action="classify"]').disabled, "Classify must be disabled without an image");
+      await click('[data-action="use-sample"]'); await click('[data-action="classify"]');
+      assert(find(".processing-overlay").textContent.includes("No image analysis"), "Sample loading disclosure is missing");
+      await until(() => find("#page-label").textContent === "Scan Result", "Scan did not open the result page");
+      assert(find(".result-category").textContent === "Plastic", "Wrong scripted result");
+      assert(!find("#scan-screen") && !find("#overview-screen") && !find("#history-list"), "Result must be its own screen");
+      assert(doc().activeElement.tagName === "H1" && win().scrollY === 0, "Result should open at its heading");
+      assert(find('#bottom-nav a[aria-current="page"]').href === pageURL("scan"), "Results should stay within Scan");
+      assert(find(".confidence-track").getAttribute("aria-valuenow") === "96", "Wrong illustrative score");
+      assert(find("main").textContent.includes("No AI prediction was made"), "Result must disclose its illustrative nature");
+      await click('[data-action="save-result"]');
+      assert(find('[data-action="save-result"]').disabled, "Saved result should not be saveable twice");
+      await click('[data-action="save-result"]');
+      await click('.result-content a[href="overview.php"]'); await until(() => find("#overview-screen"), "Continue should open overview");
+      assert(!find("#scan-screen") && !find(".result-category") && find(".overview-summary").textContent.includes("Plastic"), "Overview should summarize the result separately");
+      assert(find('[data-stat="total"]').textContent === "6", "Save count or duplicate prevention failed");
+      await click('.overview-summary a[href="scan-result.php"]'); await until(() => find(".result-category"), "Overview should reopen the latest result");
+      await go("overview", "Overview"); assert(find('[data-stat="total"]').textContent === "6", "Overview count changed unexpectedly");
+    });
+    await test("Repeated scans replace the dedicated result without automatic saving", async () => {
+      for (const [category, label] of [["paper", "Paper"], ["metal", "Metal"]]) {
+        await click('[data-action="scan-another"]'); await until(() => find("#scan-screen"), "Scan another did not open the scanner");
+        await change("#sample-scenario", category); await click('[data-action="use-sample"]'); await click('[data-action="classify"]');
+        await until(() => find("#page-label").textContent === "Scan Result", "Repeat scan did not open its result");
+        assert(find(".result-category").textContent === label && win().location.href === pageURL("result"), "Repeat scan did not replace the result");
+        assert(!find("#scan-screen") && win().scrollY === 0, "Repeat result should start on a separate screen");
+        await click('.result-content a[href="overview.php"]'); await until(() => find("#overview-screen"), "Repeat result could not continue to overview");
+        assert(find('[data-stat="total"]').textContent === "6", "Viewing a result should not save it automatically");
+      }
+    });
+    await test("History filtering, typing focus, empty search, and details dialog", async () => {
+      await go("history", "History");
+      assert(doc().querySelectorAll("tbody tr").length === 6, "Saved record missing");
+      await change("#history-filter", "paper"); assert(doc().querySelectorAll("tbody tr").length === 1, "Material filter failed");
+      find("#history-search").focus(); await change("#history-search", "newspaper", "input");
+      assert(doc().activeElement.id === "history-search", "Typing lost focus");
+      assert(doc().querySelectorAll("tbody tr").length === 1, "History search failed");
+      await click('#history-list [data-action="record"]'); assert(find("#record-dialog").open, "Details dialog did not open");
+      assert(find("#record-title").textContent === "Folded newspaper", "Wrong record details");
+      await click('#record-dialog [data-action="close-dialog"]');
+      await change("#history-search", "no-such-item", "input"); assert(find("#history-list").textContent.includes("No matching scans"), "No-match state missing");
+      await click('[data-action="reset-history-filters"]'); assert(doc().querySelectorAll("tbody tr").length === 6, "Reset filters failed");
+    });
+    await test("Camera simulation, keyboard tabs, and uncertain result", async () => {
+      await go("scan", "Scan Waste"); await click('[data-action="reset"]');
+      find("#upload-tab").dispatchEvent(new (win().KeyboardEvent)("keydown", { key: "ArrowRight", bubbles: true })); await tick();
+      assert(find("#camera-tab").getAttribute("aria-selected") === "true", "Arrow-key tab switching failed");
+      assert(find("#scan-preview-panel").textContent.includes("No camera access"), "Camera simulation disclosure missing");
+      await change("#sample-scenario", "uncertain"); await click('[data-action="capture"]'); await click('[data-action="classify"]');
+      await until(() => find("#page-label").textContent === "Scan Result", "Uncertain result did not appear");
+      assert(find(".result-category").textContent.includes("Unable to classify confidently"), "Uncertain state is missing");
+      assert(find(".confidence-track").getAttribute("aria-valuenow") === "34", "Uncertain score is incorrect");
+      await click('[data-action="save-result"]');
+    });
+    await test("Analytics reflect saved examples and provide an equivalent data table", async () => {
+      await go("analytics", "Analytics");
+      assert(find('[data-stat="total"]').textContent === "7", "Analytics count is stale");
+      assert(doc().querySelectorAll(".bars li").length === 5 && doc().querySelectorAll(".legend-table tbody tr").length === 5, "Chart text equivalents are incomplete");
+      const uncertain = [...doc().querySelectorAll(".legend-table tbody tr")].find(row => row.textContent.includes("Uncertain"));
+      assert(uncertain.cells[1].textContent === "1" && uncertain.cells[2].textContent === "14.3%", "Uncertain distribution is wrong");
+      assert(find(".notice").textContent.includes("not measured waste volume"), "Analytics disclosure missing");
+    });
+    await test("Valid local image preview and safe filename rendering", async () => {
+      await go("scan", "Scan Waste"); await click("#upload-tab");
+      const canvas = document.createElement("canvas"); canvas.width = canvas.height = 32; canvas.getContext("2d").fillRect(0, 0, 32, 32);
+      const blob = await new Promise(resolve => canvas.toBlob(resolve, "image/png"));
+      const filename = '<img src=x onerror="window.injected=true">.png';
+      await upload(new (win().File)([blob], filename, { type: "image/png" }));
+      assert(find(".preview-image")?.naturalWidth === 32, "Local image preview did not decode");
+      assert(!find('[data-action="classify"]').disabled, "Valid image should enable classify");
+      assert(find(".file-info").textContent.includes(filename) && !find(".file-info img") && !win().injected, "Filename was interpreted as markup");
+      await change("#sample-scenario", "glass"); await click('[data-action="classify"]');
+      await until(() => find(".result-category")?.textContent === "Glass", "Uploaded image scripted scenario failed");
+      await click('[data-action="save-result"]'); await click('[data-action="scan-another"]');
+      await go("history", "History"); await click('#history-list [data-action="record"]');
+      assert(find("#record-dialog img")?.complete && find("#record-dialog img").naturalWidth === 32, "Reset revoked an image retained by history");
+      await click('#record-dialog [data-action="close-dialog"]');
+    });
+    await test("Unsupported, empty, oversized, corrupt, and multiple-file errors", async () => {
+      await go("scan", "Scan Waste");
+      for (const [file, message] of [
+        [new (win().File)(["text"], "note.txt", { type: "text/plain" }), "JPEG, PNG, or WebP"],
+        [new (win().File)([], "empty.png", { type: "image/png" }), "empty"],
+        [new (win().File)([new Uint8Array(10 * 1024 * 1024 + 1)], "large.png", { type: "image/png" }), "too large"],
+        [new (win().File)(["not an image"], "broken.png", { type: "image/png" }), "couldn’t open"]
+      ]) { await upload(file); assert(find("#upload-error").textContent.includes(message), `Missing ${message} error`); assert(find('[data-action="classify"]').disabled, "Invalid file enabled classification"); }
+      const transfer = new (win().DataTransfer)(); transfer.items.add(new (win().File)(["x"], "one.png", { type: "image/png" })); transfer.items.add(new (win().File)(["y"], "two.png", { type: "image/png" }));
+      find("#dropzone").dispatchEvent(new (win().DragEvent)("drop", { dataTransfer: transfer, bubbles: true, cancelable: true })); await tick();
+      assert(find("#upload-error").textContent.includes("one image at a time"), "Multiple-file drop should be rejected");
+    });
+    await test("Reset and navigation safely cancel pending sample processing", async () => {
+      await click('[data-action="use-sample"]'); await click('[data-action="classify"]'); await click('.scan-actions [data-action="reset"]'); await tick(1100);
+      assert(win().location.href === pageURL("scan") && find('[data-action="classify"]').disabled, "Reset did not cancel the pending result");
+      await click('[data-action="use-sample"]'); await click('[data-action="classify"]'); await go("history", "History"); await tick(1100);
+      assert(find("#page-label").textContent === "History", "Pending processing hijacked navigation");
+    });
+    await test("Guide deep links, native disclosure, search, and reset", async () => {
+      await go("guide/paper", "Waste Guide");
+      assert(find("#guide-filter").value === "paper" && find("details").open, "Material deep link did not expand the correct card");
+      await change("#guide-filter", "all"); assert(doc().querySelectorAll("details").length === 5, "Guide categories missing");
+      await change("#guide-search", "newspaper", "input"); assert(doc().querySelectorAll("details").length === 1 && find("details h2").textContent === "Paper", "Guide search failed");
+      await change("#guide-search", "not-a-material", "input"); assert(find("#guide-results").textContent.includes("another search"), "Guide no-match state missing");
+      await click('[data-action="reset-guide-filters"]'); assert(doc().querySelectorAll("details").length === 5, "Guide filter reset failed");
+      assert(find(".special-handling").textContent.includes("Batteries"), "Special-handling reminder missing");
+    });
+    await test("Responsive layouts at phone, tablet, laptop, and desktop widths", async () => {
+      for (const width of [375, 768, 1024, 1440]) {
+        frame.style.width = `${width}px`; await tick();
+        for (const [hash, title] of [["landing", "Welcome"], ["scan", "Scan Waste"], ["overview", "Overview"], ["result", "Scan Result"], ["history", "History"], ["analytics", "Analytics"], ["guide", "Waste Guide"]]) {
+          await go(hash, title);
+          const viewport = doc().documentElement.clientWidth;
+          const overflow = [...doc().querySelectorAll("body *")].filter(element => !element.closest(".table-wrap") && element.getBoundingClientRect().right > viewport + 1).slice(0, 8).map(element => `${element.tagName}.${element.className.baseVal ?? element.className} (${Math.round(element.getBoundingClientRect().right)})`).join(", ");
+          assert(doc().documentElement.scrollWidth <= viewport + 1, `Horizontal page overflow at ${width}px on ${hash}: scroll=${doc().documentElement.scrollWidth}, client=${viewport}, inner=${win().innerWidth}, body=${doc().body.scrollWidth}, table=${find(".table-wrap")?.clientWidth}/${find(".table-wrap")?.scrollWidth}, x=${win().scrollX}; ${overflow}`);
+        }
+      }
+    });
+    await test("Bottom navigation on desktop, tablet, and phone", async () => {
+      for (const width of [1440, 768, 375]) {
+        frame.style.width = width + "px"; await tick(); await go("scan", "Scan Waste");
+        const nav = find("#bottom-nav");
+        assert(doc().querySelectorAll("#bottom-nav a").length === 5, "Bottom navigation should have exactly five destinations");
+        for (const [destination, title] of [["scan", "Scan Waste"], ["overview", "Overview"], ["history", "History"], ["analytics", "Analytics"], ["guide", "Waste Guide"]]) {
+          await click('#bottom-nav a[href="' + pageFiles[destination] + '"]');
+          await until(() => find("#page-label").textContent === title, "Bottom link did not navigate");
+          assert(doc().querySelectorAll('#bottom-nav [aria-current="page"]').length === 1 && find('#bottom-nav [aria-current="page"]').href === pageURL(destination), "Wrong active navigation destination");
+          assert(win().scrollY === 0, "Screen changes must open at the top, without native fragment scrolling");
+          const bounds = nav.getBoundingClientRect();
+          assert(Math.abs(bounds.bottom - win().innerHeight) <= 1 && bounds.left >= 0 && bounds.right <= win().innerWidth + 1, "Bottom bar left the viewport");
+          const target = find('#bottom-nav a[href="' + pageFiles[destination] + '"]').getBoundingClientRect();
+          assert(target.width >= 44 && target.height >= 44, "Bottom navigation needs touch-sized targets");
+          assert(find("#help-launcher").getBoundingClientRect().bottom < bounds.top, "Eco helper covers bottom navigation");
+          assert(!find("#scan-screen") || (!find("#history-list") && !find(".guide-list") && !find(".bars")), "Features leaked into the scanner");
+        }
+        await go("guide/plastic", "Waste Guide");
+        assert(find('#bottom-nav [aria-current="page"]').href === pageURL("guide"), "Guide deep links should keep Guide active");
+        find('.app-footer [data-action="about"]').scrollIntoView({ block: "center" }); await tick();
+        assert(find('.app-footer [data-action="about"]').getBoundingClientRect().bottom <= nav.getBoundingClientRect().top, "Navigation obscures the final control");
+      }
+      await click('.app-footer [data-action="about"]'); assert(find("#about-dialog").open, "About dialog did not open");
+      await click('#about-dialog [data-action="close-dialog"]'); assert(!find("#about-dialog").open, "About dialog close failed");
+    });
+    await test("Clear confirmation, zero-data states, restoration, and refresh reset", async () => {
+      await go("history", "History"); await click('[data-action="clear-history"]');
+      assert(find("#clear-dialog").open, "Clear confirmation is missing");
+      await click('#clear-dialog [data-action="close-dialog"]'); assert(doc().querySelectorAll("#history-list tbody tr").length === 8, "Cancel deleted history");
+      await click('[data-action="clear-history"]'); await click('[data-action="confirm-clear"]');
+      assert(find("#history-list").textContent.includes("No scans yet"), "Empty history state is missing");
+      await go("analytics", "Analytics"); assert(find('[data-stat="total"]').textContent === "0" && !find(".donut").getAttribute("style").includes("NaN"), "Empty analytics is invalid");
+      await click('[data-action="restore-samples"]'); assert(find('[data-stat="total"]').textContent === "5", "Sample restoration failed");
+      await load(); await go("overview", "Overview"); assert(find('[data-stat="total"]').textContent === "5", "Refresh did not restore sample state");
+    });
+    await test("Mascot helper, local answers, input safety, and navigation", async () => {
+      frame.style.width = "1440px"; await tick();
+      assert(find("#help-launcher img").complete && find("#help-launcher img").naturalWidth === 1536, "Supplied mascot image did not load");
+      find("#help-launcher").focus(); await click("#help-launcher");
+      assert(find("#help-dialog").open && find("#help-launcher").getAttribute("aria-expanded") === "true", "Helper did not open accessibly");
+      assert(doc().activeElement.id === "help-question", "Helper should focus the question field");
+      await click('#help-dialog [data-question="How do I sort a plastic bottle?"]');
+      assert(find("#help-messages .help-message:last-child a").href === pageURL("guide/plastic"), "Plastic shortcut did not use the material guide");
+      for (const [question, expectedLink] of [
+        ["How should I sort cardboard?", "#guide/paper"],
+        ["What about an aluminum can?", "#guide/metal"],
+        ["Can I recycle glass?", "#guide/glass"],
+        ["What should I do with mixed packaging?", "#guide/uncertain"],
+        ["How do I save my history?", "#history"],
+        ["What are the analytics charts?", "#analytics"],
+        ["Which bin color does my barangay use?", "#guide"]
+      ]) { const answer = await ask(question); assert(answer.querySelector("a").href === pageURL(expectedLink), `Wrong help topic for: ${question}`); }
+      const batteryAnswer = await ask("Where should batteries go?");
+      assert(batteryAnswer.textContent.includes("Special-handling") && batteryAnswer.querySelector("a").href === pageURL("guide/uncertain"), "Battery advice must direct users to special handling");
+      const ambiguous = await ask("Can I recycle a bottle?");
+      assert(ambiguous.textContent.includes("plastic or glass"), "Ambiguous bottles should not be assigned a material");
+      const mixed = await ask("Should glass and plastic go together?");
+      assert(mixed.textContent.includes("Check each material separately") && mixed.querySelector("a").href === pageURL("guide"), "Multiple material names should not produce a single classification");
+      const scoreAnswer = await ask("Are you a real AI model? What do scores mean?");
+      assert(scoreAnswer.textContent.includes("built-in guide") && scoreAnswer.textContent.includes("not live AI predictions"), "Helper must disclose its actual capabilities");
+      const fallback = await ask("What is the weather tomorrow?");
+      assert(fallback.textContent.includes("don’t have a built-in answer"), "Unsupported questions should receive a useful fallback");
+      const malicious = '<img src=x onerror="window.helpInjected=true">';
+      await ask(malicious);
+      assert([...doc().querySelectorAll(".help-message.user p")].at(-1).textContent === malicious && !find("#help-messages img") && !win().helpInjected, "Questions must be rendered as text, not HTML");
+      const messageCount = find("#help-messages").children.length;
+      for (const invalid of ["   ", "x".repeat(501)]) {
+        await change("#help-question", invalid, "input");
+        find("#help-form").dispatchEvent(new (win().Event)("submit", { bubbles: true, cancelable: true })); await tick();
+        assert(find("#help-messages").children.length === messageCount && !find("#help-question").checkValidity(), "Empty and oversized questions should be rejected");
+      }
+      const scanAnswer = await ask("How do I upload an image?");
+      assert(scanAnswer.textContent.includes("separate result page") && scanAnswer.textContent.includes("Continue to Overview"), "Eco must describe the current screen flow");
+      assert(scanAnswer.textContent.includes("isn’t analyzed") && scanAnswer.querySelector("a").href === pageURL("scan"), "Scan help must explain the sample flow");
+      await click("#help-messages .help-message:last-child a");
+      assert(!find("#help-dialog").open && find("#page-label").textContent === "Scan Waste", "Helper links should close the dialog and navigate");
+      await click("#help-launcher");
+      assert(find("#help-messages").children.length > 1, "Conversation should survive page navigation within the session");
+      await click('#help-dialog [data-action="close-dialog"]');
+      await until(() => find("#help-launcher").getAttribute("aria-expanded") === "false", "Helper expanded state did not reset");
+    });
+    await test("Helper fits phone, tablet, and desktop viewports", async () => {
+      for (const width of [375, 768, 1440]) {
+        frame.style.width = `${width}px`; await tick(); find("#help-launcher").focus(); await click("#help-launcher");
+        const dialog = find("#help-dialog"); const bounds = dialog.getBoundingClientRect();
+        assert(bounds.left >= 0 && bounds.right <= win().innerWidth && bounds.top >= 0 && bounds.bottom <= win().innerHeight, `Helper is outside the ${width}px viewport`);
+        assert(dialog.scrollWidth <= dialog.clientWidth + 1, `Helper content overflows at ${width}px`);
+        await click('#help-dialog [data-action="close-dialog"]');
+        assert(doc().activeElement.id === "help-launcher", "Closing the helper should restore focus to its launcher");
+      }
+      await go("overview", "Overview"); assert(find('[data-stat="total"]').textContent === "5", "Helper must not alter the five sample records");
+    });
+    await test("Contextual reactions use all six sheets and all 36 poses", async () => {
+      await load();
+      const seenPoses = new Set();
+      function mood(expected) {
+        output.textContent = `${messages.join("\n")}\nChecking mascot reaction: ${expected}`;
+        assert(doc().body.dataset.mascotState === expected, `Expected ${expected} mascot, got ${doc().body.dataset.mascotState}`);
+        doc().querySelectorAll("[data-mascot-slot]").forEach(portrait => {
+          const sheet = Number(portrait.dataset.sheet); const cell = Number(portrait.dataset.cell);
+          assert(sheet >= 1 && sheet <= 6 && cell >= 0 && cell < 6, "Invalid mascot sprite coordinates");
+          assert(portrait.querySelector("img").src.endsWith(`/sheet-${sheet}.png`), "Mascot source does not match its context");
+          if (win().matchMedia("(prefers-reduced-motion: reduce)").matches) assert(portrait.getAnimations().length === 0, "Reduced motion must keep mascots still");
+          seenPoses.add(`${sheet}:${cell}`);
+        });
+      }
+      mood("welcome"); await go("overview", "Overview"); mood("overview"); await go("scan", "Scan Waste");
+      const canvas = document.createElement("canvas"); canvas.width = canvas.height = 16;
+      const blob = await new Promise(resolve => canvas.toBlob(resolve, "image/png"));
+      const transfer = new (win().DataTransfer)(); transfer.items.add(new (win().File)([blob], "item.png", { type: "image/png" }));
+      find("#image-file").files = transfer.files; find("#image-file").dispatchEvent(new (win().Event)("change", { bubbles: true }));
+      mood("reading"); await until(() => find("#dropzone").getAttribute("aria-busy") === "false", "Preview did not finish"); mood("plastic");
+      await click("#camera-tab"); mood("camera"); await click("#upload-tab"); mood("ready");
+      await upload(new (win().File)(["text"], "note.txt", { type: "text/plain" })); mood("error");
+      await click('.scan-actions [data-action="reset"]'); await click('[data-action="use-sample"]');
+      for (const category of ["plastic", "paper", "metal", "glass", "uncertain"]) { await change("#sample-scenario", category); mood(category); }
+      await click('[data-action="classify"]'); mood("processing");
+      await until(() => find("#page-label").textContent === "Scan Result", "Uncertain result did not complete"); mood("uncertain");
+      await click('[data-action="scan-another"]'); await change("#sample-scenario", "plastic"); await click('[data-action="use-sample"]'); await click('[data-action="classify"]');
+      await until(() => find("#page-label").textContent === "Scan Result", "Sample result did not complete"); mood("success");
+      await click('[data-action="save-result"]'); mood("saved");
+      await go("history", "History"); mood("history"); await go("analytics", "Analytics"); mood("analytics"); await go("guide", "Waste Guide"); mood("guide");
+      await go("history", "History"); await click('[data-action="clear-history"]'); await click('[data-action="confirm-clear"]'); mood("empty");
+      await click('[data-action="restore-samples"]'); mood("restored"); await click("#help-launcher"); mood("help");
+      await change("#help-question", "A question", "input"); mood("thinking");
+      await ask("Should glass and plastic go together?"); mood("sorting");
+      await ask("What are my local collector’s rules?"); mood("local");
+      assert(seenPoses.size === 36, `Expected all 36 supplied poses to have a UX role; exercised ${seenPoses.size}`);
+      await click('#help-dialog [data-action="close-dialog"]');
+      await change("#history-search", "no matching record", "input"); mood("empty");
+      await click("#help-launcher"); await click('#help-dialog [data-action="close-dialog"]'); mood("empty");
+      await go("guide", "Waste Guide"); await change("#guide-search", "no matching material", "input"); mood("uncertain");
+      await click("#help-launcher"); await click('#help-dialog [data-action="close-dialog"]'); mood("uncertain");
+      await change("#guide-search", "", "input"); mood("guide");
+      await go("guide/uncertain", "Waste Guide"); await change("#guide-search", "unfamiliar", "input"); mood("uncertain");
+      for (let sheet = 1; sheet <= 6; sheet++) {
+        output.textContent = `${messages.join("\n")}\nChecking original mascot sheet ${sheet}`;
+        const image = new (win().Image)();
+        const loaded = new Promise((resolve, reject) => { image.onload = resolve; image.onerror = () => reject(new Error(`Could not load mascot sheet ${sheet}`)); });
+        image.src = new URL(`assets/mascots/sheet-${sheet}.png`, win().location.href).href; await loaded;
+        assert(image.naturalWidth === 1536 && image.naturalHeight === 1024, `Mascot sheet ${sheet} did not load at its original dimensions`);
+      }
+      await load(); await go("overview", "Overview");
+      assert(find('[data-stat="total"]').textContent === "5", "Mascot interactions must preserve the starter sample count");
+    });
+    await test("Direct PHP pages, guide parameters, and legacy bookmark migration", async () => {
+      for (const [page, title] of [["landing", "Welcome"], ["scan", "Scan Waste"], ["result", "Scan Result"], ["overview", "Overview"], ["history", "History"], ["analytics", "Analytics"], ["guide", "Waste Guide"]]) {
+        await load(pageFiles[page]);
+        assert(win().location.href === pageURL(page) && !win().location.hash, "Direct page did not keep its named URL");
+        assert(find("#page-label").textContent === title && doc().body.dataset.route === page, "Direct page rendered the wrong screen");
+        assert(doc().title === title + " · EcoSort AI", "Direct page title is incorrect");
+      }
+      await load("waste-guide.php?material=glass");
+      assert(find("#guide-filter").value === "glass" && doc().querySelectorAll(".guide-card").length === 1, "Guide query deep link failed");
+      await load("index.html#guide/paper");
+      assert(win().location.href === pageURL("guide/paper") && find("#guide-filter").value === "paper", "Legacy index/hash bookmark did not migrate");
+      await load("landingpage.php#home");
+      assert(win().location.href === pageURL("overview") && find('[data-stat="total"]').textContent === "5", "Legacy home bookmark failed");
+      await load("waste-guide.php?material=%3Cimg%20src%3Dx%20onerror%3Dalert(1)%3E");
+      assert(find("#guide-filter").value === "all" && doc().querySelectorAll(".guide-card").length === 5, "Unknown material must fall back to all materials");
+    });
+    await test("No uncaught application errors", async () => { assert(errors.length === 0, errors.join("; ")); });
+    messages.push(`\n${messages.length} groups passed · ${checks} assertions. Reduced-motion preference: ${win().matchMedia("(prefers-reduced-motion: reduce)").matches ? "enabled" : "not enabled"}.`);
+    output.textContent = messages.join("\n"); document.body.dataset.testStatus = "passed";
+  } catch (error) {
+    output.textContent = `${messages.join("\n")}\nFAIL ${error.stack || error}`; document.body.dataset.testStatus = "failed";
+  }
+})();
+</script>
+</body>
+</html>

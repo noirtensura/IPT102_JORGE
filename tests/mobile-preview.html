@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>EcoSort AI · 390 px preview</title>
+<style>html,body{margin:0}iframe{display:block;width:390px;height:1200px;border:0}</style>
+<iframe title="EcoSort AI at a 390 px phone viewport"></iframe>
+<script>
+const params = new URLSearchParams(location.search);
+const frame = document.querySelector("iframe");
+const page = params.get("page") || "landing";
+const pageFiles = {"landing": "landingpage.php", "scan": "scan.php", "result": "scan-result.php", "overview": "overview.php", "history": "history.php", "analytics": "analytics.php", "guide": "waste-guide.php"};
+
+// shortcut: iframe previews keep headless captures stable; remove when direct captures render consistently.
+if (params.has("desktop")) {
+  frame.style.width = "1440px";
+  frame.style.height = page === "result" ? "1150px" : page === "overview" ? "1120px" : "1050px";
+}
+if (params.has("help")) frame.style.height = "900px";
+frame.addEventListener("load", () => {
+  if (page === "result") {
+    frame.contentDocument.querySelector('[data-action="use-sample"]').click();
+    frame.contentDocument.querySelector('[data-action="classify"]').click();
+  }
+  if (params.has("help")) frame.contentDocument.querySelector("#help-launcher").click();
+});
+frame.src = "../" + pageFiles[page === "result" ? "scan" : page];
+</script>
+</html>

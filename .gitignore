@@ -1,0 +1,6 @@
+.agents/
+.gemini/
+artifacts/
+.env
+.env.*
+!.env.example
