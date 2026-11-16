@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Walkthrough motion checks</title>
+<body data-test-status="running">
+<pre id="results">Checking walkthrough transitions and cancellation…</pre>
+<iframe id="app" title="EcoSort walkthrough motion test" style="width:1440px;height:900px"></iframe>
+<script>
+const frame = document.querySelector("#app");
+const output = document.querySelector("#results");
+let checks = 0;
+function assert(condition, message) { checks++; if (!condition) throw new Error(message); }
+frame.addEventListener("load", async () => {
+  try {
+    const doc = frame.contentDocument;
+    const queryPrototype = frame.contentWindow.MediaQueryList.prototype;
+    const nativeMatches = Object.getOwnPropertyDescriptor(queryPrototype, "matches").get;
+    // shortcut: JS preference is emulated; use browser media emulation for system preference changes.
+    Object.defineProperty(queryPrototype, "matches", { get() { return this.media === "(prefers-reduced-motion: reduce)" ? false : nativeMatches.call(this); } });
+    const steps = [...doc.querySelectorAll(".walkthrough-step")];
+    const next = doc.querySelector(".tour-arrow[data-tour-next]");
+    const previous = doc.querySelector(".tour-arrow[data-tour-prev]");
+    next.click();
+    assert(!steps[1].hidden, "Next must reveal the scanner step");
+    assert(!steps[0].hidden && steps[0].inert && steps[0].getAttribute("aria-hidden") === "true", "The outgoing card must remain visible but inactive during its slide");
+    assert(!steps[1].inert && steps[1].getAttribute("aria-hidden") === "false", "Only the incoming card may be interactive");
+    const firstTransition = steps[1].getAnimations();
+    assert(firstTransition.length === 1, "A step change needs one native transition");
+    const outgoing = steps[0].getAnimations();
+    assert(outgoing.length === 1 && outgoing[0].effect.getTiming().duration === 600 && firstTransition[0].effect.getTiming().duration === 600, "Both cards must slide together for 600 ms");
+    assert(firstTransition[0].effect.getKeyframes()[0].transform === "translateX(100%)" && outgoing[0].effect.getKeyframes().at(-1).transform === "translateX(-100%)", "Cards must move a full width in the same carousel direction");
+    assert(parseFloat(doc.querySelector(".walkthrough-track").style.height) >= steps[1].offsetHeight, "The carousel must size itself to the incoming card");
+    previous.click();
+    assert(firstTransition.every(animation => animation.playState === "idle"), "Leaving a step must cancel its transition");
+    next.click();
+    const lastTransition = steps[1].getAnimations();
+    steps[0].getAnimations().forEach(animation => animation.finish());
+    await new Promise(resolve => setTimeout(resolve, 30));
+    assert(steps[0].hidden, "A completed outgoing card must be hidden");
+    doc.querySelector("[data-tour-sample]").click();
+    assert(doc.querySelector("[data-tour-sample]").disabled, "Demo loading must disable repeated requests");
+    doc.querySelector("#proceed").click();
+    assert(lastTransition.every(animation => animation.playState === "idle"), "Navigation must cancel the outgoing transition");
+    assert(doc.body.dataset.route === "scan", "Proceed must open the scanner");
+    await new Promise(resolve => setTimeout(resolve, 1100));
+    assert(doc.body.dataset.route === "scan" && !doc.querySelector("#walkthrough"), "A canceled demo must not update the next screen");
+    output.textContent = `${checks} motion assertions passed using native browser animations. Full-width slides, outgoing cleanup, height sizing, and cancellation are verified.`;
+    document.body.dataset.testStatus = "passed";
+  } catch (error) { output.textContent = error.stack || error; document.body.dataset.testStatus = "failed"; }
+});
+frame.src = "../landingpage.php";
+</script>
+</body>
+</html>

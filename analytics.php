@@ -1,3 +1,3 @@
 <?php
-$pageTitle = 'Analytics';
-require __DIR__ . '/includes/layout.php';
+header('Location: history.php', true, 302);
+exit;

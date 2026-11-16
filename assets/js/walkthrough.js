@@ -1,116 +1,75 @@
 "use strict";
 
-const walkthroughMobile = matchMedia("(max-width: 767px)");
+const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)");
 let walkthroughStep = 0;
 let walkthroughDemoMaterial = "plastic";
 let walkthroughSampleReady = false;
 let walkthroughSampleSaved = false;
 let walkthroughTimer = null;
-let walkthroughScrollTimer = null;
-let lastWalkthroughScrollAt = 0;
-let programmaticScrollUntil = 0;
+let walkthroughAutoTimer = null;
+let walkthroughPlaying = true;
+let walkthroughResizeObserver;
 
 function stopWalkthrough() {
+  document.querySelectorAll(".walkthrough-step").forEach(step => step.getAnimations().forEach(animation => animation.cancel()));
   clearTimeout(walkthroughTimer);
   walkthroughTimer = null;
-  clearTimeout(walkthroughScrollTimer);
-  walkthroughScrollTimer = null;
-  window.removeEventListener("scroll", scheduleWalkthroughScrollSync);
-  window.removeEventListener("resize", scheduleWalkthroughScrollSync);
+  clearTimeout(walkthroughAutoTimer);
+  walkthroughAutoTimer = null;
+  walkthroughResizeObserver?.disconnect();
+  walkthroughResizeObserver = null;
 }
 
-function animateWalkthroughStep(step, direction) {
-  step.getAnimations().forEach(animation => animation.cancel());
-  if (!reducedMascotMotion.matches && !walkthroughMobile.matches && direction) {
+function scheduleWalkthrough() {
+  clearTimeout(walkthroughAutoTimer);
+  walkthroughAutoTimer = null;
+  if (!document.querySelector("#walkthrough") || !walkthroughPlaying || document.hidden || document.querySelector(".walkthrough-step:focus-within")) return;
+  walkthroughAutoTimer = setTimeout(() => setWalkthroughStep(walkthroughStep + 1, true), 5000);
+}
+
+function resizeWalkthrough() {
+  const active = document.querySelector(".walkthrough-step[data-tour-active]");
+  if (active) document.querySelector(".walkthrough-track").style.height = `${active.offsetHeight}px`;
+}
+
+function animateWalkthroughStep(step, previous, direction) {
+  if (!reducedMotion.matches && direction) {
+    const options = { duration: 600, easing: "cubic-bezier(.4, 0, .2, 1)" };
+    const outgoing = previous.animate(
+      [{ transform: "translateX(0)" }, { transform: `translateX(${-direction * 100}%)` }],
+      { ...options, fill: "forwards" }
+    );
+    // Canceled slides are cleaned up by the next card change.
+    outgoing.finished.then(() => { if (!previous.hasAttribute("data-tour-active")) previous.hidden = true; }, () => {});
     step.animate(
-      [{ opacity: 0, transform: `translateX(${direction * 22}px)` }, { opacity: 1, transform: "translateX(0)" }],
-      { duration: 240, easing: "cubic-bezier(0.22, 1, 0.36, 1)" }
+      [{ transform: `translateX(${direction * 100}%)` }, { transform: "translateX(0)" }],
+      options
     );
   }
 }
 
-function syncWalkthroughScrollStep() {
-  if (!walkthroughMobile.matches || !document.querySelector("#walkthrough")) return;
-  if (performance.now() < programmaticScrollUntil) return;
-  const steps = [...document.querySelectorAll(".walkthrough-step")];
-  if (!steps.length) return;
-  const topbar = document.querySelector(".walkthrough-topbar");
-  const threshold = (topbar ? topbar.getBoundingClientRect().bottom : 72) + Math.min(120, window.innerHeight * 0.18);
-  let active = 0;
-  if (window.scrollY <= 24) {
-    active = 0;
-  } else if (window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 24) {
-    active = steps.length - 1;
-  } else {
-    steps.forEach((step, index) => {
-      if (step.getBoundingClientRect().top <= threshold) active = index;
-    });
-  }
-  setWalkthroughStep(active, false);
-}
-
-function scheduleWalkthroughScrollSync() {
-  const now = performance.now();
-  if (now - lastWalkthroughScrollAt >= 32) {
-    lastWalkthroughScrollAt = now;
-    syncWalkthroughScrollStep();
-  }
-  clearTimeout(walkthroughScrollTimer);
-  walkthroughScrollTimer = setTimeout(() => {
-    walkthroughScrollTimer = null;
-    lastWalkthroughScrollAt = performance.now();
-    syncWalkthroughScrollStep();
-  }, 40);
-}
-
-function setWalkthroughStep(index, scroll = false) {
+function setWalkthroughStep(index, automatic = false) {
   const steps = [...document.querySelectorAll(".walkthrough-step")];
   if (!steps.length || !Number.isInteger(index)) return;
   const previousStep = walkthroughStep;
-  const nextStep = Math.max(0, Math.min(steps.length - 1, index));
-  const changed = previousStep !== nextStep;
-  walkthroughStep = nextStep;
+  walkthroughStep = (index % steps.length + steps.length) % steps.length;
   const focused = document.activeElement;
   steps.forEach((step, number) => {
-    step.hidden = !walkthroughMobile.matches && number !== walkthroughStep;
+    step.getAnimations().forEach(animation => animation.cancel());
+    step.hidden = number !== walkthroughStep && (number !== previousStep || previousStep === walkthroughStep || reducedMotion.matches);
     step.toggleAttribute("data-tour-active", number === walkthroughStep);
-    step.setAttribute("aria-roledescription", walkthroughMobile.matches ? "step" : "slide");
-    if (number !== walkthroughStep) {
-      step.getAnimations().forEach(animation => animation.cancel());
-      step.querySelectorAll(".mascot-portrait").forEach(portrait => portrait.getAnimations().forEach(animation => animation.cancel()));
-    }
+    step.inert = number !== walkthroughStep;
+    step.setAttribute("aria-hidden", String(number !== walkthroughStep));
+    step.setAttribute("aria-roledescription", "slide");
+    step.removeAttribute("aria-labelledby");
+    step.setAttribute("aria-label", `${number + 1} of ${steps.length}: ${step.dataset.tourTitle}`);
   });
-  document.querySelectorAll(".tour-step-pill[data-tour-jump]").forEach((pill, number) => {
-    if (number === walkthroughStep) pill.setAttribute("aria-current", "step");
-    else pill.removeAttribute("aria-current");
-    pill.toggleAttribute("data-tour-done", number < walkthroughStep);
-  });
-  const fill = document.querySelector("#tour-progress-fill");
-  if (fill) fill.style.width = `${((walkthroughStep + 1) / steps.length) * 100}%`;
-  const scrollHintLabel = document.querySelector("#tour-scroll-hint span");
-  if (scrollHintLabel) scrollHintLabel.textContent = walkthroughStep === steps.length - 1 ? "Ready to scan" : "Scroll down for steps";
-  const prevButton = document.querySelector(".tour-arrow[data-tour-prev]");
-  const nextButton = document.querySelector(".tour-arrow[data-tour-next]");
-  if (prevButton) prevButton.disabled = walkthroughStep === 0;
-  if (nextButton) nextButton.disabled = walkthroughStep === steps.length - 1;
-  const status = document.querySelector("#walkthrough-status");
-  if (status) {
-    status.setAttribute("aria-live", walkthroughMobile.matches ? "off" : "polite");
-    status.textContent = `${walkthroughStep + 1} / ${steps.length} · ${steps[walkthroughStep].dataset.tourTitle}`;
-  }
-  if (!helpDialog.open) updateMascots(pageMascotState());
-  if (changed) {
-    const portrait = steps[walkthroughStep].querySelector(".mascot-portrait");
-    if (portrait) animateMascot(portrait, mascotStates[steps[walkthroughStep].dataset.tourMood].motion);
-    animateWalkthroughStep(steps[walkthroughStep], Math.sign(nextStep - previousStep));
-  }
-  if (focused && (focused.closest(".walkthrough-step")?.hidden || focused.disabled)) {
-    steps[walkthroughStep].querySelector("h2")?.focus({ preventScroll: true });
-  }
-  if (scroll && walkthroughMobile.matches) {
-    programmaticScrollUntil = reducedMascotMotion.matches ? 0 : performance.now() + 650;
-    steps[walkthroughStep].scrollIntoView({ behavior: reducedMascotMotion.matches ? "auto" : "smooth", block: "start" });
-  }
+  document.querySelector(".walkthrough-track").setAttribute("aria-live", automatic ? "off" : "polite");
+  resizeWalkthrough();
+  if (previousStep !== walkthroughStep) animateWalkthroughStep(steps[walkthroughStep], steps[previousStep], Math.sign(index - previousStep));
+  const focusedStep = focused?.closest(".walkthrough-step");
+  if (focusedStep && !focusedStep.hasAttribute("data-tour-active")) steps[walkthroughStep].querySelector("h2")?.focus({ preventScroll: true });
+  scheduleWalkthrough();
 }
 
 function updateWalkthroughSampleUI(ready) {
@@ -131,8 +90,8 @@ function updateWalkthroughSampleUI(ready) {
   sampleButton.innerHTML = ready ? `${icon("check")}<span>Sample ready</span>` : `${icon("upload")}<span>Try this sample</span>`;
   if (feedback) {
     feedback.textContent = ready
-      ? `Nice! ${material.example} is ready. Explore what the result looks like next.`
-      : "This is a practice preview. Your scan history stays as it is.";
+      ? `${material.example} ready. View the result next.`
+      : "Practice only · nothing saved.";
   }
 }
 
@@ -146,8 +105,8 @@ function setWalkthroughSaveDemo(saved) {
     ? `${icon("check")}<span>Saved in preview</span>`
     : `${icon("save")}<span>Save to History (demo)</span>`;
   feedback.textContent = saved
-    ? "Preview saved! Real scans add entries to your in-session History until you refresh."
-    : "Open the tip or test saving in this preview. Saving a real sample result is optional.";
+    ? "Demo saved. Scan records last until refresh."
+    : "Try the tip or save button.";
 }
 
 function selectWalkthroughMaterial(key) {
@@ -162,7 +121,7 @@ function selectWalkthroughMaterial(key) {
   const placeholderCaption = document.querySelector("#tour-placeholder-caption");
   const sampleSvgUse = document.querySelector("#tour-sample-svg use");
   const sampleCaption = document.querySelector("#tour-sample-caption");
-  if (placeholderCaption) placeholderCaption.textContent = `Ready to preview: ${material.example}.`;
+  if (placeholderCaption) placeholderCaption.textContent = material.example;
   if (sampleSvgUse) sampleSvgUse.setAttribute("href", `#art-${key}`);
   if (sampleCaption) sampleCaption.textContent = `${material.example} · Illustrated sample`;
   updateWalkthroughSampleUI(false);
@@ -189,48 +148,39 @@ function selectWalkthroughMaterial(key) {
   setWalkthroughSaveDemo(false);
 }
 
-function setupWalkthrough(preserveStep = false) {
+function setupWalkthrough() {
   stopWalkthrough();
-  const steps = [...document.querySelectorAll(".walkthrough-step")];
-  if (!steps.length) return;
-  if (!preserveStep) {
-    walkthroughStep = 0;
-    walkthroughDemoMaterial = "plastic";
-    walkthroughSampleReady = false;
-    walkthroughSampleSaved = false;
-  }
-  const focusedStep = document.activeElement?.closest(".walkthrough-step");
-  if (focusedStep) walkthroughStep = Number(focusedStep.dataset.tourStep);
-  document.querySelector(".walkthrough-track")?.setAttribute("aria-roledescription", walkthroughMobile.matches ? "walkthrough" : "carousel");
-  setWalkthroughStep(walkthroughStep);
-  if (walkthroughMobile.matches) {
-    window.addEventListener("scroll", scheduleWalkthroughScrollSync, { passive: true });
-    window.addEventListener("resize", scheduleWalkthroughScrollSync, { passive: true });
-  }
+  walkthroughStep = 0;
+  walkthroughDemoMaterial = "plastic";
+  walkthroughSampleReady = false;
+  walkthroughSampleSaved = false;
+  walkthroughPlaying = true;
+  setWalkthroughStep(0);
+  const track = document.querySelector(".walkthrough-track");
+  walkthroughResizeObserver = new ResizeObserver(resizeWalkthrough);
+  track.querySelectorAll(".walkthrough-step").forEach(step => walkthroughResizeObserver.observe(step));
+  track.addEventListener("focusin", scheduleWalkthrough);
+  track.addEventListener("focusout", () => queueMicrotask(scheduleWalkthrough));
 }
 
-walkthroughMobile.addEventListener("change", () => {
-  if (!document.querySelector("#walkthrough")) return;
-  setupWalkthrough(true);
-  if (walkthroughMobile.matches) {
-    programmaticScrollUntil = performance.now() + 200;
-    document.querySelector(".walkthrough-step[data-tour-active]")?.scrollIntoView({ block: "start", behavior: "auto" });
-  } else {
-    window.scrollTo(0, 0);
-  }
-});
+document.addEventListener("visibilitychange", scheduleWalkthrough);
 
 document.addEventListener("click", event => {
-  const button = event.target.closest("[data-tour-next], [data-tour-prev], [data-tour-jump], [data-tour-restart], [data-tour-material], [data-tour-sample], [data-tour-demo-save], [data-tour-feature]");
+  const button = event.target.closest("[data-tour-next], [data-tour-prev], [data-tour-toggle], [data-tour-restart], [data-tour-material], [data-tour-sample], [data-tour-demo-save], [data-tour-feature]");
   if (!button || button.disabled || !button.closest("#walkthrough")) return;
-  if (button.hasAttribute("data-tour-next")) setWalkthroughStep(walkthroughStep + 1, true);
-  if (button.hasAttribute("data-tour-prev")) setWalkthroughStep(walkthroughStep - 1, true);
-  if (button.hasAttribute("data-tour-jump")) setWalkthroughStep(Number(button.dataset.tourJump), true);
-  if (button.hasAttribute("data-tour-restart")) setWalkthroughStep(0, true);
+  if (button.hasAttribute("data-tour-next")) setWalkthroughStep(walkthroughStep + 1);
+  if (button.hasAttribute("data-tour-prev")) setWalkthroughStep(walkthroughStep - 1);
+  if (button.hasAttribute("data-tour-restart")) setWalkthroughStep(0);
+  if (button.hasAttribute("data-tour-toggle")) {
+    walkthroughPlaying = !walkthroughPlaying;
+    button.textContent = walkthroughPlaying ? "Pause" : "Play";
+    button.setAttribute("aria-label", walkthroughPlaying ? "Pause slideshow" : "Play slideshow");
+    scheduleWalkthrough();
+  }
   if (button.hasAttribute("data-tour-material")) selectWalkthroughMaterial(button.dataset.tourMaterial);
   if (button.hasAttribute("data-tour-sample")) {
     clearTimeout(walkthroughTimer);
-    if (reducedMascotMotion.matches) {
+    if (reducedMotion.matches) {
       updateWalkthroughSampleUI(true);
     } else {
       const placeholder = document.querySelector("#tour-upload-placeholder");
@@ -257,24 +207,11 @@ document.addEventListener("click", event => {
   }
 });
 
-document.addEventListener("keydown", event => {
-  if (route !== "landing" || walkthroughMobile.matches || !document.querySelector("#walkthrough")) return;
-  if (event.altKey || event.ctrlKey || event.metaKey || document.querySelector("dialog[open]")) return;
-  if (event.target instanceof Element && event.target.closest("input, textarea, select, summary, [contenteditable]")) return;
-  if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
-  const steps = document.querySelectorAll(".walkthrough-step");
-  if (!steps.length) return;
-  event.preventDefault();
-  const index = event.key === "Home"
-    ? 0
-    : event.key === "End"
-      ? steps.length - 1
-      : walkthroughStep + (event.key === "ArrowRight" ? 1 : -1);
-  setWalkthroughStep(index);
-});
-
-reducedMascotMotion.addEventListener("change", () => {
-  if (reducedMascotMotion.matches) {
-    document.querySelectorAll(".walkthrough-step").forEach(step => step.getAnimations().forEach(animation => animation.cancel()));
+reducedMotion.addEventListener("change", () => {
+  if (reducedMotion.matches) {
+    document.querySelectorAll(".walkthrough-step").forEach(step => {
+      step.getAnimations().forEach(animation => animation.cancel());
+      step.hidden = !step.hasAttribute("data-tour-active");
+    });
   }
 });
